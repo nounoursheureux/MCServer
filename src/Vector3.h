@@ -404,6 +404,24 @@ typedef Vector3<int>    Vector3i;
 
 
 
+namespace std
+{
+	template <class What>
+	struct hash<Vector3<What>>
+	{
+	public:
+
+		size_t operator()(const Vector3<What> & a_Vector) const
+		{
+			return ((std::hash<What>()(a_Vector.x) ^ (std::hash<What>()(a_Vector.y) << 1)) ^ std::hash<What>()(a_Vector.z));
+		}
+	};
+}
+
+
+
+
+
 typedef std::list<Vector3i>   cVector3iList;
 typedef std::vector<Vector3i> cVector3iArray;
 

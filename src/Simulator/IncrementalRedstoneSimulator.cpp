@@ -92,33 +92,23 @@ void cIncrementalRedstoneSimulator::AddBlock(const Vector3i & a_RelBlockPosition
 	}
 
 	auto & SimulatedPlayerToggleableBlocks = static_cast<cIncrementalRedstoneSimulatorChunkData *>(a_OriginalChunk->GetRedstoneSimulatorData())->m_SimulatedPlayerToggleableBlocks;
-	if (
-		DoesIgnorePlayerToggle(Block) &&
-		std::find_if(SimulatedPlayerToggleableBlocks.begin(), SimulatedPlayerToggleableBlocks.end(),
-			[a_RelBlockPosition](const sSimulatedPlayerToggleableList & itr){ return itr.a_RelBlockPos == a_RelBlockPosition; }) == SimulatedPlayerToggleableBlocks.end()
-		)
+	if (DoesIgnorePlayerToggle(Block))
 	{
-		// We have arrived here; no block must be in list - add one
-		sSimulatedPlayerToggleableList RC;
-		RC.a_RelBlockPos = a_RelBlockPosition;
-		RC.WasLastStatePowered = AreCoordsDirectlyPowered(a_RelBlockPosition.x, a_RelBlockPosition.y, a_RelBlockPosition.z, a_OriginalChunk) || AreCoordsLinkedPowered(a_RelBlockPosition.x, a_RelBlockPosition.y, a_RelBlockPosition.z, a_OriginalChunk);
-
 		// Initialise the toggleable blocks list so that trapdoors etc. aren't reset on restart (#1887)
-		SimulatedPlayerToggleableBlocks.emplace_back(RC);
+		SimulatedPlayerToggleableBlocks.emplace(
+			a_RelBlockPosition,
+			AreCoordsDirectlyPowered(a_RelBlockPosition.x, a_RelBlockPosition.y, a_RelBlockPosition.z, a_OriginalChunk) || AreCoordsLinkedPowered(a_RelBlockPosition.x, a_RelBlockPosition.y, a_RelBlockPosition.z, a_OriginalChunk)
+			);  // This map won't insert if key already present, so no need to check
+	}
+	else
+	{
+		SimulatedPlayerToggleableBlocks.erase(a_RelBlockPosition);
 	}
 
-	SimulatedPlayerToggleableBlocks.erase(std::remove_if(SimulatedPlayerToggleableBlocks.begin(), SimulatedPlayerToggleableBlocks.end(), [a_RelBlockPosition, Block, this](const sSimulatedPlayerToggleableList & itr)
-		{
-			return (itr.a_RelBlockPos == a_RelBlockPosition) && !DoesIgnorePlayerToggle(Block);
-		}
-	), SimulatedPlayerToggleableBlocks.end());
-	
-	auto & RepeatersDelayList = static_cast<cIncrementalRedstoneSimulatorChunkData *>(a_OriginalChunk->GetRedstoneSimulatorData())->m_RepeatersDelayList;
-	RepeatersDelayList.erase(std::remove_if(RepeatersDelayList.begin(), RepeatersDelayList.end(), [a_RelBlockPosition, Block](const sRepeatersDelayList & itr)
-		{
-			return (itr.a_RelBlockPos == a_RelBlockPosition) && (Block != E_BLOCK_REDSTONE_REPEATER_ON) && (Block != E_BLOCK_REDSTONE_REPEATER_OFF);
-		}
-	), RepeatersDelayList.end());
+	if ((Block != E_BLOCK_REDSTONE_REPEATER_ON) && (Block != E_BLOCK_REDSTONE_REPEATER_OFF))
+	{
+		static_cast<cIncrementalRedstoneSimulatorChunkData *>(a_OriginalChunk->GetRedstoneSimulatorData())->m_RepeatersDelayList.erase(a_RelBlockPosition);
+	}
 
 	auto & RedstoneSimulatorChunkData = static_cast<cIncrementalRedstoneSimulatorChunkData *>(a_OriginalChunk->GetRedstoneSimulatorData())->m_ChunkData;
 	for (auto & itr : RedstoneSimulatorChunkData)
@@ -870,34 +860,30 @@ void cIncrementalRedstoneSimulator::HandleRedstoneRepeater(int a_RelBlockX, int 
 
 void cIncrementalRedstoneSimulator::HandleRedstoneRepeaterDelays()
 {
-	for (auto itr = m_RepeatersDelayList->begin(); itr != m_RepeatersDelayList->end();)
+	for (auto & itr : *m_RepeatersDelayList)
 	{
-		if (itr->a_ElapsedTicks >= itr->a_DelayTicks)  // Has the elapsed ticks reached the target ticks?
+		if (itr.second.a_ElapsedTicks >= itr.second.a_DelayTicks)  // Has the elapsed ticks reached the target ticks?
 		{
-			int RelBlockX = itr->a_RelBlockPos.x;
-			int RelBlockY = itr->a_RelBlockPos.y;
-			int RelBlockZ = itr->a_RelBlockPos.z;
 			BLOCKTYPE Block;
 			NIBBLETYPE Meta;
-			m_Chunk->GetBlockTypeMeta(RelBlockX, RelBlockY, RelBlockZ, Block, Meta);
-			if (itr->ShouldPowerOn)
+			m_Chunk->GetBlockTypeMeta(itr.first.x, itr.first.y, itr.first.z, Block, Meta);
+			if (itr.second.ShouldPowerOn)
 			{
 				if (Block != E_BLOCK_REDSTONE_REPEATER_ON)  // For performance
 				{
-					m_Chunk->SetBlock(itr->a_RelBlockPos, E_BLOCK_REDSTONE_REPEATER_ON, Meta);
+					m_Chunk->SetBlock(itr.first, E_BLOCK_REDSTONE_REPEATER_ON, Meta);
 				}
 			}
 			else if (Block != E_BLOCK_REDSTONE_REPEATER_OFF)
 			{
-				m_Chunk->SetBlock(RelBlockX, RelBlockY, RelBlockZ, E_BLOCK_REDSTONE_REPEATER_OFF, Meta);
+				m_Chunk->SetBlock(itr.first.x, itr.first.y, itr.first.z, E_BLOCK_REDSTONE_REPEATER_OFF, Meta);
 			}
-			itr = m_RepeatersDelayList->erase(itr);
+			m_RepeatersDelayList->erase(itr.first);
 		}
 		else
 		{
-			LOGD("Incremented a repeater @ {%i %i %i} | Elapsed ticks: %i | Target delay: %i", itr->a_RelBlockPos.x, itr->a_RelBlockPos.y, itr->a_RelBlockPos.z, itr->a_ElapsedTicks, itr->a_DelayTicks);
-			itr->a_ElapsedTicks++;
-			itr++;
+			LOGD("Incremented a repeater @ {%i %i %i} | Elapsed ticks: %i | Target delay: %i", itr.first.x, itr.first.y, itr.first.z, itr.second.a_ElapsedTicks, itr.second.a_DelayTicks);
+			itr.second.a_ElapsedTicks++;
 		}
 	}
 }
@@ -1871,9 +1857,9 @@ bool cIncrementalRedstoneSimulator::AreCoordsSimulated(int a_RelBlockX, int a_Re
 {
 	for (const auto & itr : *m_SimulatedPlayerToggleableBlocks)
 	{
-		if (itr.a_RelBlockPos.Equals(Vector3i(a_RelBlockX, a_RelBlockY, a_RelBlockZ)))
+		if (itr.first.Equals(Vector3i(a_RelBlockX, a_RelBlockY, a_RelBlockZ)))
 		{
-			if (itr.WasLastStatePowered != IsCurrentStatePowered)  // Was the last power state different to the current?
+			if (itr.second != IsCurrentStatePowered)  // Was the last power state different to the current?
 			{
 				return false;  // It was, coordinates are no longer simulated
 			}
@@ -2116,60 +2102,37 @@ void cIncrementalRedstoneSimulator::SetBlockLinkedPowered(
 
 void cIncrementalRedstoneSimulator::SetPlayerToggleableBlockAsSimulated(int a_RelBlockX, int a_RelBlockY, int a_RelBlockZ, bool a_WasLastStatePowered)
 {
-	for (auto & itr : *m_SimulatedPlayerToggleableBlocks)
-	{
-		if (!itr.a_RelBlockPos.Equals(Vector3i(a_RelBlockX, a_RelBlockY, a_RelBlockZ)))
-		{
-			continue;
-		}
-
-		// Update listing
-		itr.WasLastStatePowered = a_WasLastStatePowered;
-		return;
-	}
-
-	// We have arrived here; no block must be in list - add one
-	sSimulatedPlayerToggleableList RC;
-	RC.a_RelBlockPos = Vector3i(a_RelBlockX, a_RelBlockY, a_RelBlockZ);
-	RC.WasLastStatePowered = a_WasLastStatePowered;
-	m_SimulatedPlayerToggleableBlocks->emplace_back(RC);
+	m_SimulatedPlayerToggleableBlocks[Vector3i(a_RelBlockX, a_RelBlockY, a_RelBlockZ)] = a_WasLastStatePowered;
 }
 
 
 
 
 
-bool cIncrementalRedstoneSimulator::QueueRepeaterPowerChange(int a_RelBlockX, int a_RelBlockY, int a_RelBlockZ, NIBBLETYPE a_Meta, bool ShouldPowerOn)
+void cIncrementalRedstoneSimulator::QueueRepeaterPowerChange(int a_RelBlockX, int a_RelBlockY, int a_RelBlockZ, NIBBLETYPE a_Meta, bool a_ShouldPowerOn)
 {
-	for (auto itr = m_RepeatersDelayList->begin(); itr != m_RepeatersDelayList->end(); ++itr)
-	{
-		if (itr->a_RelBlockPos.Equals(Vector3i(a_RelBlockX, a_RelBlockY, a_RelBlockZ)))
-		{
-			if (ShouldPowerOn == itr->ShouldPowerOn)  // We are queued already for the same thing, don't replace entry
-			{
-				return false;
-			}
-
-			// Already in here (normal to allow repeater to continue on powering and updating blocks in front) - just update info and quit
-			itr->a_DelayTicks = (((a_Meta & 0xC) >> 0x2) + 1) * 2;  // See below for description
-			itr->a_ElapsedTicks = 0;
-			itr->ShouldPowerOn = ShouldPowerOn;
-			return false;
-		}
-	}
-
-	// Self not in list, add self to list
 	sRepeatersDelayList RC;
-	RC.a_RelBlockPos = Vector3i(a_RelBlockX, a_RelBlockY, a_RelBlockZ);
 
 	// Gets the top two bits (delay time), shifts them into the lower two bits, and adds one (meta 0 = 1 tick; 1 = 2 etc.)
 	// Multiply by 2 because in MCS, 1 redstone tick = 1 world tick, but in Vanilla, 1 redstone tick = 2 world ticks, and we need to maintain compatibility
 	RC.a_DelayTicks = (((a_Meta & 0xC) >> 0x2) + 1) * 2;
-
 	RC.a_ElapsedTicks = 0;
-	RC.ShouldPowerOn = ShouldPowerOn;
-	m_RepeatersDelayList->emplace_back(RC);
-	return true;
+	RC.ShouldPowerOn = a_ShouldPowerOn;
+
+	auto Result = m_RepeatersDelayList->emplace(Vector3i(a_RelBlockX, a_RelBlockY, a_RelBlockZ), RC);
+	if (!Result.second)
+	{
+		// Key exists
+		if (a_ShouldPowerOn == Result.first->second.ShouldPowerOn)
+		{
+			// We are queued already for the same thing, don't replace entry
+			return;
+		}
+
+		Result.first->second.a_DelayTicks = RC.a_DelayTicks;
+		Result.first->second.a_ElapsedTicks = 0;
+		Result.first->second.ShouldPowerOn = a_ShouldPowerOn;
+	}
 }
 
 
